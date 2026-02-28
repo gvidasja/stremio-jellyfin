@@ -32,6 +32,7 @@ export type FullItem = {
   Type: string
   MediaSources: {
     Id: string
+    Path: string
     MediaStreams: {
       DisplayTitle: string
     }[]

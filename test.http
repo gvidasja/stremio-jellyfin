@@ -1,0 +1,33 @@
+@baseUrl=http://192.168.1.10:8096
+
+###
+# @name auth
+POST {{baseUrl}}/Users/authenticatebyname
+Content-Type: application/json
+X-Emby-Authorization: MediaBrowser Client="Jellyfin Stremio Addon", Device="test", DeviceId="test", Version="1.0.0.0"
+
+{
+    "Username": "jellyfin",
+    "Pw": "20152015"
+}
+
+###
+@userId={{auth.response.body.User.Id}}
+@token={{auth.response.body.AccessToken}}
+@authHeader=MediaBrowser Client="Jellyfin Stremio Addon", Device="test", DeviceId="test", Version="1.0.0.0", Token="{{token}}"
+
+###
+GET {{baseUrl}}/Items?recursive=true&hasImdbId=true
+X-Emby-Authorization: {{authHeader}}
+
+###
+GET {{baseUrl}}/Items/e8a213b848d934ae31e531603302db53
+X-Emby-Authorization: {{authHeader}}
+
+###
+GET {{baseUrl}}/Items?recursive=true&fields=ProviderIds,MediaSources&recursive=true
+X-Emby-Authorization: {{authHeader}}
+
+###
+GET {{baseUrl}}/Shows/6a8f87e9a16d68139593b7c30eeb5f31/Episodes?fields=MediaSources
+X-Emby-Authorization: {{authHeader}}
