@@ -1,9 +1,12 @@
 import { addonBuilder, ContentType } from 'stremio-addon-sdk'
-import { Jellyfin, ListItem, server } from './jellyfin.js'
+import { FullItem, Jellyfin, ListItem, server } from './jellyfin.js'
 import { manifest } from './manifest.js'
-import { getTorrents } from './transmission.js'
+import { Torrentio, TorrentioStream } from './torrentio.js'
+import { getTorrents, TorrentInfo } from './transmission.js'
 
-const jellyfin = new Jellyfin()
+const torrentio = new Torrentio()
+
+export const jellyfin = new Jellyfin()
 await jellyfin.authenticate()
 
 let builder = new addonBuilder(manifest)
@@ -35,92 +38,130 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
 builder.defineStreamHandler(async ({ type, id: imdbId }) => {
   console.log('request for streams: ' + type + ' ' + imdbId)
 
+  const torrentioStreams = await torrentio.getStreams(type, imdbId)
+  if (torrentioStreams.length === 0) {
+    return { streams: [] }
+  }
+
+  console.log(torrentioStreams)
+
+  const torrents = await getTorrents()
+  const torrentMap = new Map<string, TorrentInfo>(
+    (torrents || []).map(t => [t.hashString.toLowerCase(), t]),
+  )
+
+  const downloadDir = await resolveDownloadDir(type, imdbId)
+  const { jfItem, itemId } = await getJellyfinData(imdbId)
+
+  console.log(torrentioStreams)
+
+  return {
+    streams: torrentioStreams.flatMap(stream => [
+      stream,
+      matchJellyfinStream(stream, torrentMap, jfItem, itemId) ||
+        getDownloadStream(stream, downloadDir, imdbId),
+    ]),
+  }
+})
+
+export const addonInterface = builder.getInterface()
+
+async function getJellyfinData(
+  imdbId: string,
+): Promise<{ jfItem: FullItem | null; itemId: string | undefined }> {
   const itemId = imdbId.includes(':')
     ? await getEpisodeItemId(imdbId)
     : await jellyfin.getItemIdByImdbId(imdbId)
 
-  let jfItem: any = null
-  let jfStream: any = null
+  let jfItem: FullItem | null = null
   if (itemId) {
     try {
       const dashedItemId = itemId.replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/g, '$1-$2-$3-$4-$5')
       jfItem = await jellyfin.getFullItem(dashedItemId)
-      jfStream = await jellyfin.getStream(itemId)
     } catch (e) {
       console.log('Failed to fetch jellyfin full item or stream', e)
     }
   }
 
-  const torrents = await getTorrents()
-  const torrentMap = new Map((torrents || []).map(t => [t.hashString.toLowerCase(), t]))
+  return { jfItem, itemId }
+}
 
-  let torrentioStreams: any[] = []
+async function resolveDownloadDir(type: string, imdbId: string): Promise<string> {
+  if (type === 'movie') {
+    return '/srv/transmission/downloads/movies'
+  }
+
+  if (type !== 'series') {
+    return '/srv/transmission/downloads'
+  }
+
+  const seriesId = imdbId.split(':')[0]
+  let showName = 'unknown-show'
   try {
-    const res = await fetch(`https://torrentio.strem.fun/stream/${type}/${imdbId}.json`)
+    const res = await fetch(`https://v3-cinemeta.strem.io/meta/series/${seriesId}.json`)
     if (res.ok) {
       const data = await res.json()
-      torrentioStreams = data.streams || []
-    }
-  } catch (e) {
-    console.log('Failed to fetch from torrentio', e)
-  }
-
-  const streams = []
-
-  for (const stream of torrentioStreams) {
-    const infoHash = stream.infoHash?.toLowerCase()
-    const torrent = infoHash ? torrentMap.get(infoHash) : undefined
-
-    let title = stream.title
-    if (torrent) {
-      const percent = Math.round(torrent.percentDone * 100)
-      title = `[${percent}%] ` + title
-    }
-
-    let isJellyfinSource = false
-    if (jfItem && jfItem.MediaSources) {
-      for (const source of jfItem.MediaSources) {
-        if (source.Path && torrent && source.Path.includes(torrent.name)) {
-          isJellyfinSource = true
-          break
-        }
-        const titleLines = stream.title ? stream.title.split('\n') : []
-        if (
-          titleLines.length > 2 &&
-          source.Path &&
-          source.Path.includes(titleLines[titleLines.length - 1])
-        ) {
-          isJellyfinSource = true
-          break
-        }
+      if (data?.meta?.name) {
+        showName = data.meta.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
       }
     }
+  } catch (e) {}
 
-    let url: string
-    if (isJellyfinSource && jfStream) {
-      url = jfStream.url
-    } else {
-      const trackers = [
-        'udp://tracker.opentrackr.org:1337/announce',
-        'udp://tracker.ds.is:6969/announce',
-      ]
-      const torrentUrl =
-        stream.url || `magnet:?xt=urn:btih:${stream.infoHash}&tr=${trackers.join('&tr=')}`
-      const port = (process.env.SERVER_PORT && parseInt(process.env.SERVER_PORT)) || 60421
-      url = `http://127.0.0.1:${port}/download/${stream.infoHash}?url=${encodeURIComponent(torrentUrl)}`
-    }
+  return `/srv/transmission/downloads/tv/${showName}`
+}
 
-    streams.push({
+function matchJellyfinStream(
+  stream: TorrentioStream,
+  torrentMap: Map<string, TorrentInfo>,
+  jfItem: FullItem | null,
+  itemId: string | undefined,
+): TorrentioStream | undefined {
+  if (!jfItem?.MediaSources || !itemId) return undefined
+
+  const infoHash = stream.infoHash?.toLowerCase()
+  const torrent = infoHash ? torrentMap.get(infoHash) : undefined
+  const titleLines = stream.title?.split('\n') ?? []
+
+  const matchingSource = jfItem.MediaSources.find(source => {
+    if (!source.Path) return false
+    if (torrent && source.Path.includes(torrent.name)) return true
+    if (titleLines.length > 2 && source.Path.includes(titleLines[titleLines.length - 1]))
+      return true
+    return false
+  })
+
+  if (matchingSource) {
+    return {
       name: stream.name || 'Torrentio',
-      title,
-      url,
-    })
+      title: `[JELLYFIN] ${stream.title}`,
+      url: jellyfin.getStreamUrl(itemId, matchingSource.Id),
+      infoHash: stream.infoHash,
+    }
   }
 
-  return { streams }
-})
+  return undefined
+}
 
-async function getEpisodeItemId(imdbId: string): Promise<string | undefined> {
+function getDownloadStream(
+  stream: TorrentioStream,
+  downloadDir: string,
+  imdbId: string,
+): TorrentioStream {
+  const torrentUrl = stream.url || `magnet:?xt=urn:btih:${stream.infoHash}`
+  const host = process.env.ADDON_HOST || 'http://127.0.0.1'
+  const port = (process.env.SERVER_PORT && parseInt(process.env.SERVER_PORT)) || 60421
+  const fileIdxQuery = stream.fileIdx !== undefined ? `&fileIdx=${stream.fileIdx}` : ''
+  const url = `${host}:${port}/download/${stream.infoHash}?url=${encodeURIComponent(torrentUrl)}&downloadDir=${encodeURIComponent(downloadDir)}&imdbId=${encodeURIComponent(imdbId)}${fileIdxQuery}`
+
+  return {
+    name: stream.name || 'Torrentio',
+    title: `[DOWNLOAD] ${stream.title}`,
+    url,
+    infoHash: stream.infoHash,
+  }
+}
+
+export async function getEpisodeItemId(imdbId: string): Promise<string | undefined> {
   const resolvedId = imdbId.split(':')
   const seriesId = resolvedId[0]
   const seasonIndex = parseInt(resolvedId[1])
@@ -134,5 +175,3 @@ async function getEpisodeItemId(imdbId: string): Promise<string | undefined> {
 
   return await jellyfin.getEpisodeItemId(seriesItemId, seasonIndex, episodeIndex)
 }
-
-export const addonInterface = builder.getInterface()

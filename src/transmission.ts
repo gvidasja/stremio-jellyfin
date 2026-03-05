@@ -60,6 +60,36 @@ export async function getTorrents(): Promise<TorrentInfo[]> {
   return (res && res.torrents) || []
 }
 
-export async function addTorrent(url: string) {
-  return await rpc('torrent-add', { filename: url })
+export async function addTorrent(url: string, downloadDir?: string) {
+  const args: any = { filename: url, bandwidthPriority: 1 }
+  // Provide sequentialDownload in case the transmission fork supports it
+  args['sequentialDownload'] = false
+  if (downloadDir) {
+    args['download-dir'] = downloadDir
+  }
+  return await rpc('torrent-add', args)
+}
+
+export async function getTorrentDetails(hashString: string): Promise<any | null> {
+  const res = await rpc('torrent-get', {
+    ids: [hashString],
+    fields: ['hashString', 'files', 'fileStats', 'metadataPercentComplete'],
+  })
+  if (res && res.torrents && res.torrents.length > 0) {
+    return res.torrents[0]
+  }
+  return null
+}
+
+export async function setFileWanted(hashString: string, fileIdx: number, totalFiles: number) {
+  const unwanted = []
+  for (let i = 0; i < totalFiles; i++) {
+    if (i !== fileIdx) unwanted.push(i)
+  }
+  await rpc('torrent-set', {
+    ids: [hashString],
+    'files-wanted': [fileIdx],
+    'files-unwanted': unwanted,
+    'priority-high': [fileIdx],
+  })
 }

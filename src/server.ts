@@ -10,8 +10,10 @@ app.use(express.urlencoded({ extended: true }))
 
 app.get('/download/:infoHash', async (req, res) => {
   const url = req.query.url as string
+  const downloadDir = req.query.downloadDir as string
+
   if (url) {
-    await addTorrent(url)
+    await addTorrent(url, downloadDir)
     console.log(`Added torrent: ${req.params.infoHash}`)
     res.send('Torrent added to Transmission!')
   } else {

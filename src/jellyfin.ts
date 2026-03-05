@@ -111,17 +111,40 @@ export class Jellyfin {
     const dashedItemId = addUuidDashes(itemId)
     const item = await this.getFullItem(dashedItemId)
 
-    const params = new URLSearchParams({
-      static: 'true',
-      api_key: this.auth.AccessToken,
-      mediaSourceId: item.MediaSources[0].Id,
-    })
-
     return {
-      url: `${server}/videos/${dashedItemId}/stream.mkv?${params}`,
+      url: this.getStreamUrl(itemId, item.MediaSources[0].Id),
       name: 'Jellyfin',
       description: item.MediaSources[0].MediaStreams[0].DisplayTitle,
     }
+  }
+
+  getStreamUrl(itemId: string, mediaSourceId: string): string {
+    if (!this.auth) {
+      throw new Error('Jellyfin is not authenticated')
+    }
+
+    const dashedItemId = addUuidDashes(itemId)
+
+    const params = new URLSearchParams({
+      static: 'true',
+      api_key: this.auth.AccessToken,
+      mediaSourceId,
+    })
+
+    return `${server}/videos/${dashedItemId}/stream.mkv?${params}`
+  }
+
+  async refreshLibrary() {
+    if (!this.auth) {
+      this.auth = await this.getAuth()
+    }
+    console.log('Triggering Jellyfin Library Refresh...')
+    return fetch(`${server}/Library/Refresh`, {
+      method: 'POST',
+      headers: {
+        'X-Emby-Authorization': await this.getAuthHeader(),
+      },
+    })
   }
 
   private async get<T>(path: string, params?: URLSearchParams): Promise<T> {
