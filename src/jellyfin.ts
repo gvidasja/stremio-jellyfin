@@ -1,7 +1,7 @@
 import os from 'os'
+import { Stream, StreamsProvider } from './streams-provider'
 
 const device = os.hostname()
-const itemsLimit = 20
 
 type JellyfinAuth = {
   AccessToken: string
@@ -36,7 +36,7 @@ export type FullItem = {
   }[]
 }
 
-export class Jellyfin {
+export class Jellyfin implements StreamsProvider {
   private auth?: JellyfinAuth
 
   constructor(
@@ -47,32 +47,6 @@ export class Jellyfin {
 
   async authenticate() {
     this.auth = await this.getAuth()
-  }
-
-  async searchItems(skip: number, movie: boolean, searchTerm = '') {
-    const params = new URLSearchParams({
-      userId: await this.getUserId(),
-      hasImdbId: 'true',
-      recursive: 'true',
-      startIndex: skip.toString(),
-      limit: itemsLimit.toString(),
-      sortBy: 'SortName',
-      fields: 'ProviderIds',
-    })
-
-    if (searchTerm) {
-      params.set('searchTerm', searchTerm)
-    }
-
-    if (movie) {
-      params.set('isMovie', 'true')
-    } else {
-      params.set('isSeries', 'true')
-    }
-
-    const items = await this.get<JellyfinItems<ListItem>>('/Items', params)
-
-    return items.Items
   }
 
   async getFullItem(itemId: string) {
@@ -106,18 +80,18 @@ export class Jellyfin {
     return episodes.Items.find(it => it.IndexNumber === episodeIndex)?.Id
   }
 
-  async getStream(itemId: string) {
+  async getStreams(itemId: string): Promise<Stream[]> {
     if (!this.auth) {
       this.auth = await this.getAuth()
     }
 
     const item = await this.getFullItem(itemId)
 
-    return {
+    return item.MediaSources.map(ms => ({
       url: this.getStreamUrl(itemId, item.MediaSources[0].Id),
       name: 'Jellyfin',
-      description: item.MediaSources[0].MediaStreams[0].DisplayTitle,
-    }
+      title: ms.MediaStreams[0].DisplayTitle,
+    }))
   }
 
   getStreamUrl(itemId: string, mediaSourceId: string): string {
@@ -138,7 +112,9 @@ export class Jellyfin {
     if (!this.auth) {
       this.auth = await this.getAuth()
     }
-    console.log('Triggering Jellyfin Library Refresh...')
+
+    console.log('triggering Jellyfin library refresh...')
+
     return fetch(`${this.server}/Library/Refresh`, {
       method: 'POST',
       headers: {
@@ -173,7 +149,7 @@ export class Jellyfin {
   }
 
   private async getAuth(): Promise<JellyfinAuth> {
-    console.log(`Connecting to Jellyfin server: ${this.server} with username: ${this.user}`)
+    console.log(`connecting to Jellyfin server: ${this.server} with username: ${this.user}`)
 
     return await fetch(`${this.server}/Users/authenticatebyname`, {
       method: 'POST',
@@ -186,11 +162,11 @@ export class Jellyfin {
       const response = await it.json()
 
       if (it.status !== 200) {
-        console.log(`Failed to authenticate: ${JSON.stringify(response)}`)
+        console.log(`failed to authenticate: ${JSON.stringify(response)}`)
         process.exit(1)
       }
 
-      console.log(`Successfully connected to Jellyfin server: ${this.server}. Happy streaming.`)
+      console.log(`successfully connected to Jellyfin server: ${this.server}. Happy streaming.`)
       return response
     })
   }
