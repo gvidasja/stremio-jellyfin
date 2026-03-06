@@ -98,7 +98,7 @@ const streamsProvider = new DownloadingStreamProvider(
 
 // Instantiate services
 const stremioAddonRouter = new StremioAddonRouter(streamsProvider)
-const downloadRouter = new DownloadRouter(transmission)
+const downloadRouter = new DownloadRouter(transmission, jellyfin)
 
 // Build Stremio Addon
 const app = express()

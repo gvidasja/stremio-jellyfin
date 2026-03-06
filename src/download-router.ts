@@ -1,8 +1,12 @@
 import express from 'express'
+import { Jellyfin } from './jellyfin.ts'
 import { Transmission } from './transmission.ts'
 
 export class DownloadRouter {
-  constructor(private transmission: Transmission) {}
+  constructor(
+    private transmission: Transmission,
+    private jellyfin: Jellyfin,
+  ) {}
 
   private async resolveSubDir(type: string, imdbId: string): Promise<string> {
     if (type === 'movie') {
@@ -34,6 +38,10 @@ export class DownloadRouter {
     router
       .use(express.json())
       .use(express.urlencoded({ extended: true }))
+      .get('/refresh', async (req, res) => {
+        await this.jellyfin.refreshLibrary()
+        res.send('Jellyfin library refresh triggered!')
+      })
       .get('/download/:infoHash', async (req, res) => {
         const url = req.query.url as string
         const type = req.query.type as string

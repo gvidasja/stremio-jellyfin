@@ -33,12 +33,25 @@ export class DownloadingStreamProvider implements StreamsProvider {
 
     return [
       ...(itemId ? await this.jellyfin.getStreams(itemId) : []),
+      this.getRefreshStream(),
       ...torrentStreams.flatMap(stream => {
         const matchingStream = this.matchJellyfinStream(stream, torrentMap, jfItem, itemId)
         if (matchingStream) return [stream, matchingStream]
         return [stream, this.getDownloadStream(stream, type, imdbId)]
       }),
     ]
+  }
+
+  private getRefreshStream(): Stream {
+    const host = process.env.ADDON_HOST || 'http://127.0.0.1'
+    const port = (process.env.SERVER_PORT && parseInt(process.env.SERVER_PORT)) || 60421
+    const url = `${host}:${port}/refresh`
+
+    return {
+      name: 'Jellyfin',
+      title: '🔄 Refresh Library',
+      url,
+    }
   }
 
   private async getJellyfinData(
