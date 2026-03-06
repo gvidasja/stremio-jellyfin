@@ -1,51 +1,3 @@
-export const transmissionUrl = process.env.TRANSMISSION_URL
-const user = process.env.TRANSMISSION_USER
-const password = process.env.TRANSMISSION_PASSWORD
-
-let sessionId: string | undefined
-
-async function rpc(method: string, args: any) {
-  if (!transmissionUrl) return null
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  }
-
-  if (user && password) {
-    headers['Authorization'] = 'Basic ' + Buffer.from(user + ':' + password).toString('base64')
-  }
-
-  if (sessionId) {
-    headers['X-Transmission-Session-Id'] = sessionId
-  }
-
-  let result = await fetch(`${transmissionUrl}/transmission/rpc`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ method, arguments: args }),
-  })
-
-  if (result.status === 409) {
-    sessionId = result.headers.get('x-transmission-session-id') || undefined
-    if (sessionId) {
-      headers['X-Transmission-Session-Id'] = sessionId
-      result = await fetch(`${transmissionUrl}/transmission/rpc`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ method, arguments: args }),
-      })
-    }
-  }
-
-  if (!result.ok) {
-    console.error('Transmission RPC error', result.status, await result.text())
-    return null
-  }
-
-  const json = await result.json()
-  return json.arguments
-}
-
 export type TorrentInfo = {
   hashString: string
   percentDone: number
@@ -53,43 +5,95 @@ export type TorrentInfo = {
   status: number
 }
 
-export async function getTorrents(): Promise<TorrentInfo[]> {
-  const res = await rpc('torrent-get', {
-    fields: ['hashString', 'percentDone', 'name', 'status'],
-  })
-  return (res && res.torrents) || []
-}
+export class Transmission {
+  private sessionId: string | undefined
 
-export async function addTorrent(url: string, downloadDir?: string) {
-  const args: any = { filename: url, bandwidthPriority: 1 }
-  // Provide sequentialDownload in case the transmission fork supports it
-  args['sequentialDownload'] = false
-  if (downloadDir) {
-    args['download-dir'] = downloadDir
-  }
-  return await rpc('torrent-add', args)
-}
+  constructor(
+    private transmissionUrl: string,
+    private user?: string,
+    private password?: string,
+    private downloadDirBase: string = '/srv/transmission/downloads',
+  ) {}
 
-export async function getTorrentDetails(hashString: string): Promise<any | null> {
-  const res = await rpc('torrent-get', {
-    ids: [hashString],
-    fields: ['hashString', 'files', 'fileStats', 'metadataPercentComplete'],
-  })
-  if (res && res.torrents && res.torrents.length > 0) {
-    return res.torrents[0]
-  }
-  return null
-}
+  private async rpc(method: string, args: any) {
+    if (!this.transmissionUrl) return null
 
-export async function setFileWanted(hashString: string, fileIdx: number, totalFiles: number) {
-  const unwanted = []
-  for (let i = 0; i < totalFiles; i++) {
-    if (i !== fileIdx) unwanted.push(i)
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+
+    if (this.user && this.password) {
+      headers['Authorization'] =
+        'Basic ' + Buffer.from(this.user + ':' + this.password).toString('base64')
+    }
+
+    const makeRequest = () =>
+      fetch(`${this.transmissionUrl}/transmission/rpc`, {
+        method: 'POST',
+        headers: {
+          ...headers,
+          ...(this.sessionId ? { 'X-Transmission-Session-Id': this.sessionId } : {}),
+        },
+        body: JSON.stringify({ method, arguments: args }),
+      })
+
+    let result = await makeRequest()
+
+    if (result.status === 409) {
+      this.sessionId = result.headers.get('x-transmission-session-id') || undefined
+      if (this.sessionId) {
+        result = await makeRequest()
+      }
+    }
+
+    if (!result.ok) {
+      console.error('Transmission RPC error', result.status, await result.text())
+      return null
+    }
+
+    const json = await result.json()
+    return json.arguments
   }
-  await rpc('torrent-set', {
-    ids: [hashString],
-    'files-wanted': [fileIdx],
-    'files-unwanted': unwanted,
-    'priority-high': [fileIdx],
-  })
+
+  async getTorrents(): Promise<TorrentInfo[]> {
+    const res = await this.rpc('torrent-get', {
+      fields: ['hashString', 'percentDone', 'name', 'status'],
+    })
+    return (res && res.torrents) || []
+  }
+
+  async addTorrent(url: string, subDir?: string) {
+    const args: any = { filename: url, bandwidthPriority: 1 }
+    args['sequentialDownload'] = false
+    if (subDir) {
+      args['download-dir'] = `${this.downloadDirBase}/${subDir}`.replace(/\/+/g, '/')
+    } else {
+      args['download-dir'] = this.downloadDirBase
+    }
+    return await this.rpc('torrent-add', args)
+  }
+
+  async getTorrentDetails(hashString: string): Promise<any | null> {
+    const res = await this.rpc('torrent-get', {
+      ids: [hashString],
+      fields: ['hashString', 'files', 'fileStats', 'metadataPercentComplete'],
+    })
+    if (res && res.torrents && res.torrents.length > 0) {
+      return res.torrents[0]
+    }
+    return null
+  }
+
+  async setFileWanted(hashString: string, fileIdx: number, totalFiles: number) {
+    const unwanted = []
+    for (let i = 0; i < totalFiles; i++) {
+      if (i !== fileIdx) unwanted.push(i)
+    }
+    await this.rpc('torrent-set', {
+      ids: [hashString],
+      'files-wanted': [fileIdx],
+      'files-unwanted': unwanted,
+      'priority-high': [fileIdx],
+    })
+  }
 }

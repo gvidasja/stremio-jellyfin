@@ -1,8 +1,5 @@
 import os from 'os'
 
-export const server = process.env.JELLYFIN_SERVER
-const user = process.env.JELLYFIN_USER
-const password = process.env.JELLYFIN_PASSWORD
 const device = os.hostname()
 const itemsLimit = 20
 
@@ -41,6 +38,12 @@ export type FullItem = {
 
 export class Jellyfin {
   private auth?: JellyfinAuth
+
+  constructor(
+    public server: string,
+    private user: string,
+    private password: string,
+  ) {}
 
   async authenticate() {
     this.auth = await this.getAuth()
@@ -108,8 +111,7 @@ export class Jellyfin {
       this.auth = await this.getAuth()
     }
 
-    const dashedItemId = addUuidDashes(itemId)
-    const item = await this.getFullItem(dashedItemId)
+    const item = await this.getFullItem(itemId)
 
     return {
       url: this.getStreamUrl(itemId, item.MediaSources[0].Id),
@@ -123,15 +125,13 @@ export class Jellyfin {
       throw new Error('Jellyfin is not authenticated')
     }
 
-    const dashedItemId = addUuidDashes(itemId)
-
     const params = new URLSearchParams({
       static: 'true',
       api_key: this.auth.AccessToken,
       mediaSourceId,
     })
 
-    return `${server}/videos/${dashedItemId}/stream.mkv?${params}`
+    return `${this.server}/videos/${itemId}/stream.mkv?${params}`
   }
 
   async refreshLibrary() {
@@ -139,7 +139,7 @@ export class Jellyfin {
       this.auth = await this.getAuth()
     }
     console.log('Triggering Jellyfin Library Refresh...')
-    return fetch(`${server}/Library/Refresh`, {
+    return fetch(`${this.server}/Library/Refresh`, {
       method: 'POST',
       headers: {
         'X-Emby-Authorization': await this.getAuthHeader(),
@@ -148,7 +148,7 @@ export class Jellyfin {
   }
 
   private async get<T>(path: string, params?: URLSearchParams): Promise<T> {
-    return fetch(`${server}/${path}?${params}`, {
+    return fetch(`${this.server}${path}?${params}`, {
       headers: {
         'Content-Type': 'application/json',
         'X-Emby-Authorization': await this.getAuthHeader(),
@@ -173,17 +173,15 @@ export class Jellyfin {
   }
 
   private async getAuth(): Promise<JellyfinAuth> {
-    console.log(
-      `Connecting to Jellyfin server: ${server} with username: ${user} and password: ${password}`,
-    )
+    console.log(`Connecting to Jellyfin server: ${this.server} with username: ${this.user}`)
 
-    return await fetch(`${server}/Users/authenticatebyname`, {
+    return await fetch(`${this.server}/Users/authenticatebyname`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Emby-Authorization': `MediaBrowser Client="Jellyfin Stremio Addon", Device="${device}", DeviceId="${device}", Version="1.0.0.0""`,
       },
-      body: JSON.stringify({ Username: user, Pw: password }),
+      body: JSON.stringify({ Username: this.user, Pw: this.password }),
     }).then(async it => {
       const response = await it.json()
 
@@ -192,12 +190,8 @@ export class Jellyfin {
         process.exit(1)
       }
 
-      console.log(`Successfully connected to Jellyfin server: ${server}. Happy streaming.`)
+      console.log(`Successfully connected to Jellyfin server: ${this.server}. Happy streaming.`)
       return response
     })
   }
-}
-
-function addUuidDashes(plainStringUuid: string): string {
-  return plainStringUuid.replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/g, '$1-$2-$3-$4-$5')
 }
